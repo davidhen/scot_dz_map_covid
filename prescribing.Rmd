@@ -1,16 +1,32 @@
 ---
-title: "Untitled"
+title: "Vulnerability to Covid-19 in Scotland"
+subtitle: "Analysis by NHS Health Board"
 author: "David Henderson"
 date: "30/03/2020"
-output: html_document
+output: 
+  html_document:
+    code_folding: hide
+    df_print: paged
+    toc: true
+    toc_float: true
+    theme: spacelab
 ---
 
 ```{r setup, include=FALSE}
 knitr::opts_chunk$set(echo = TRUE)
 ```
 
-```{r}
+# Introduction
+
+Code to accompany blog post on personal and SCADR pages. 
+
+## Packages
+
+Load in required packages
+
+```{r, message=FALSE,warning=FALSE}
 library(tidyverse)
+library(ggrepel)
 library(janitor)
 library(gtools)
 library(sf)
@@ -21,18 +37,35 @@ theme_set(theme_minimal(base_family = "Roboto",
             theme(panel.grid.minor = element_blank()))
 ```
 
-```{r}
+## Data
+
+Measurement data comes from [NHS Scotland's open data pages](https://www.opendata.nhs.scot/theme/isd). I use the most recent prescribing data available from [Dec 2019](https://www.opendata.nhs.scot/dataset/prescriptions-in-the-community/resource/fa276ad2-669a-472f-9c47-809f199fae21). The geography lookup codes were derived from the [datazone 2011 file](https://www.opendata.nhs.scot/dataset/geography-codes-and-labels/resource/395476ab-0720-4740-be07-ff4467141352) (although in hindsight I could have just as easily used the [Health Board lookup](https://www.opendata.nhs.scot/dataset/geography-codes-and-labels/resource/652ff726-e676-4a20-abda-435b98dd7bdc)]). Population estimates for each health board were derived from [this file](https://www.opendata.nhs.scot/dataset/population-estimates/resource/27a72cc8-d6d8-430c-8b4f-3109a9ceadb1) using the most recent estimates from 2018. 
+
+Some of these files only need some very quick cleaning to either drop unnecessary information or quick calculations so do those in this chunk of code where appropriate. 
+
+*Note:* the first of these files is very large and can take a few minutes to load. 
+
+```{r, warning=FALSE, message=FALSE}
+#Load in prescribing data direct from source. This is a very large file 
+#so using data.table's fread() function
+
 presc <- data.table::fread("https://www.opendata.nhs.scot/dataset/84393984-14e9-4b0d-a797-b288db64d088/resource/fa276ad2-669a-472f-9c47-809f199fae21/download/pitc201912.csv")
 
+#Load in Health Board lookup file to match HB codes to names
+#Some wuick tidying here to drop unnecessary data in this file
 geog <- data.table::fread("https://www.opendata.nhs.scot/dataset/9f942fdb-e59e-44f5-b534-d6e17229cc7b/resource/395476ab-0720-4740-be07-ff4467141352/download/geography_codes_and_labels_dz2011_10012020.csv") %>% 
   clean_names %>% 
   select(hb2014, hb2014name) %>% 
   distinct(hb2014, hb2014name)
 
+#Load in popuoation estimates
+#More quick cleaning - keep most recent year of data and drop data 
+#For Scotland as a whole
 pop <- data.table::fread("https://www.opendata.nhs.scot/dataset/7f010430-6ce1-4813-b25c-f7f335bdc4dc/resource/27a72cc8-d6d8-430c-8b4f-3109a9ceadb1/download/hb2014_pop_est_01072019.csv") %>% 
   mutate(Year = as.character(Year)) %>% 
   filter(Year == "2018" & HB2014 != "S92000003") 
 
+#Quickly calculate population for each health board. 
 hb_pop <- 
   pop %>% 
   select(HB2014, AllAges) %>% 
@@ -41,62 +74,109 @@ hb_pop <-
   clean_names
 ```
 
+# Tidy the prescribing data
+
+Here what the prescribing file looks like
 
 ```{r}
+presc
+```
+
+I want a measure to reflect the vulnerability in each health board area. Respiratory diseases have been shown in early studies to be *one* of the indicators of people developing more severe Covid-19 related. complications. 
+
+In order to do that,  I subset the prescribing data to include only medicines from chapter 3 of the British National Formulary (BNF) (`BNFItemCode`) which lists drugs for the respiratory system. Then join in the health board names (to match the codes), and the population estimate for each health board. 
+
+This lets me then count the total number of paid items for each health board followed by a normalised measure of the quantity of paid items per capita. I assign this to a new object `presc_resp` and then do a quick and dirty plot of the results. 
+
+```{r, fig.width=12, message=FALSE, warning=FALSE}
 presc_resp <- 
   presc %>% 
+  #names to lower case
   clean_names %>% 
+  #tidy up the HB name
   rename(hb2014 = hbt2014) %>% 
+  #Keep only rows from chapter 3
   filter(str_detect(bnf_item_code, "^03")) %>%  
+  #Join in the HB lookup
   left_join(., geog) %>% 
+  #Join in the population estimate
   left_join(., hb_pop) %>% 
+  #group
   group_by(hb2014) %>% 
-  mutate(n_gp = n_distinct(gp_practice),
-         resp = sum(paid_quantity)/total_pop) 
-
-
-presc_resp %>% 
+  #total paid items and divide by population
+  mutate(resp = sum(paid_quantity)/total_pop) %>% 
+  #Just keep first line for each HB - actual presc not required
+  #now as we have summary measures. 
   distinct(hb2014, resp, .keep_all = TRUE) %>% 
+  #keep only required columns
+  select(hb2014, hb2014name, resp, total_pop)
+
+#Plot the result
+presc_resp %>% 
   ggplot(aes(reorder(hb2014name, -resp), resp)) +
   geom_col(fill = "#4477AA") +
   coord_flip() +
   labs(x = "", 
-       y = "Number of paid respiratory items per head of population")
+       y = "Paid quantity of respiratory items per capita")
 ```
 
-```{r}
+#Tidy population data
+
+Here I go back to the raw population data (`pop`) to calculate the proportion of the population over the age of 70 in each health board area and join it to the cleaned prescribing data from the section above. This is assigned to a new object `final_tab`.
+
+
+```{r, warning=FALSE, message=FALSE}
 final_tab <- 
   pop %>% 
-  select(HB2014, Age70:Age90plus) %>% 
+  #select rows from 70 plus only
+  select(HB2014, Age70:Age90plus) %>%
+  #calculate total population over 70 in a new column
   mutate(pop_70plus = rowSums(.[2:22])) %>% 
+  #drop all the other age columns
   select(HB2014, pop_70plus) %>% 
+  #column names to lower case
   clean_names %>% 
+  #join to the cleaned prescribing data
   left_join(presc_resp, .) %>% 
+  #Drop the additional row for each HB
   distinct(hb2014name, .keep_all = TRUE) %>% 
-  mutate(frq70 = round(pop_70plus/total_pop * 100,1)) %>% 
-  rename(id = hb2014name) %>% 
-  mutate(id = str_replace_all(id, "NHS ", "")) %>% 
+  #Calculate % over 70 in a new column and drop the "NHS" prefix
+  #from the HB name
+  mutate(pct70 = round(pop_70plus/total_pop * 100,1),
+         hb2014name = str_replace_all(hb2014name, "NHS ", "")) %>% 
+  #drop the grouping
   ungroup
 
 final_tab
-
-final_tab %>% 
-  ggplot(aes(frq70, resp)) +
-  geom_point() +
-  scale_x_continuous(limits = c(0, 15)) +
-  scale_y_continuous(limits = c(0, 5))
 ```
 
+I can now plot the % of the population over 70 against the paid quantity of prescribed items per capita
+
+```{r, fig.width=9, fig.height=6.75}
+final_tab %>% 
+  ggplot(aes(pct70, resp)) +
+  geom_point() +
+  geom_text_repel(aes(label = hb2014name), force = 20) +
+  scale_x_continuous(limits = c(0, 15)) +
+  scale_y_continuous(limits = c(0, 5)) +
+  labs(title = "",
+       x = "% population over 70",
+       y = "Paid quantity respiratory items per capita")
+```
+
+#Create tertiles
+
+Here I create tertiles for each measure and assign each health board to one of 9 possible category's depending on values of % over 70 and paid quantity of respiratory items
 
 
 ```{r}
 #generate tertiles
-final_tab$age70tert <- quantcut(final_tab$frq70, q=3, labels=FALSE)
+final_tab$age70tert <- quantcut(final_tab$pct70, q=3, labels=FALSE)
 final_tab$resptert <- quantcut(final_tab$resp, q=3, labels=FALSE)
 
 #save cutoffs
-frq70_1 <- quantile(final_tab$frq70, probs=1/3, na.rm=TRUE)
-frq70_2 <- quantile(final_tab$frq70, probs=2/3, na.rm=TRUE)
+pct70_1 <- quantile(final_tab$pct70, probs=1/3, na.rm=TRUE)
+pct70_2 <- quantile(final_tab$pct70, probs=2/3, na.rm=TRUE)
 resp_1 <- quantile(final_tab$resp, probs=1/3, na.rm=TRUE)
 resp_2 <- quantile(final_tab$resp, probs=2/3, na.rm=TRUE)
 
@@ -127,30 +207,42 @@ final_tab$colour <- case_when(
   
 )
 
-keydata <- final_tab %>%
+keydata <- 
+  final_tab %>%
   filter(!is.na(colour)) %>%
   group_by(age70tert, resptert) %>%
   summarise(RGB=unique(colour)) %>% 
   ungroup %>% 
+  #14 HBs fit into 7 (not 9 groups) need to add in the 
+  #Unused groups manually
   add_row(., age70tert = 1, resptert = 2, RGB = "#BC7C5F") %>% 
   add_row(., age70tert = 2, resptert = 1, RGB = "#89A1C8")
 
 final_tab
 ```
 
+#Plot the map
 
+##Shapefile
 
+First of all I need to read in the shapefile. As these are usually zipped I have downloaded it into the "data" folder in this project and read it in from there. 
+
+The source data comes from [data.gov.uk](https://data.gov.uk/dataset/27d0fe5f-79bb-4116-aec9-a8e565ff756a/nhs-health-boards)
 
 ```{r}
+#read in the shape file and change name to match final_tab name
 hb_shp <- read_sf("data/SG_NHS_HealthBoards_2019/SG_NHS_HealthBoards_2019.shp") %>% 
-  rename(id = HBName)
+  rename(hb2014name = HBName)
 
+#join to the analysis data frame
 final_tab <- 
   final_tab %>% 
   left_join(., hb_shp)
-final_tab
 ```
 
+## Main Plot
+
+Now I can plot. Using the `dplyr` join syntax means the data is now a `tbl` which means I need to specify the geometry in the `geom_sf()` call. 
 
 ```{r, fig.width=9, fig.height=12}
 map <- 
@@ -181,7 +273,9 @@ map <-
 map
 ```
 
+## Plot key
 
+Now create the key
 
 ```{r}
 key <- ggplot(keydata)+
@@ -191,7 +285,7 @@ key <- ggplot(keydata)+
        y = expression("Higher respiratory prescriptions\n               per capita" %->%  "")) +
   # make font small enough
   theme(
-    axis.title = element_text(size = 8),
+    axis.title = element_text(size = 12),
     axis.line=element_blank(), 
     axis.ticks=element_blank(), 
     axis.text=element_blank())+
@@ -201,10 +295,12 @@ key <- ggplot(keydata)+
 key
 ```
 
+## Combined plot
+
+Stick them together
 
 
-
-```{r, fig.width=9, fig.height=12}
+```{r, fig.width=9, fig.height=12, warning=FALSE, message=FALSE}
 final <- 
   ggdraw()+
   draw_plot(map, 0,0,1,1)+
@@ -212,9 +308,15 @@ final <-
 final
 ```
 
+## Save the output
 
+```{r, eval=FALSE}
+ggsave("age_resp_plot.png", final, width = 9, height = 12, dpi = 600)
+```
+
+# Session Information
 
 ```{r}
-ggsave("age_resp_plot.png", final, width = 9, height = 12, dpi = 600)
+devtools::session_info()
 ```
 
