@@ -1,0 +1,173 @@
+---
+title: "Vulnerability to Covid-19 in Scotland"
+subtitle: "Analysis by Intermediate Zone"
+author: "David Henderson"
+date: "30/03/2020"
+output: 
+  html_document:
+    code_folding: hide
+    df_print: paged
+    toc: true
+    toc_float: true
+    theme: spacelab
+---
+
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+
+# Introduction
+
+Recreate analysis in `prescribing.Rmd` but use Intermediate zones (as opposed to Health Board) as the geogrpahy. 
+
+
+## Packages
+
+Load in required packages
+
+```{r, message=FALSE,warning=FALSE}
+library(tidyverse)
+library(ggrepel)
+library(janitor)
+library(gtools)
+library(sf)
+library(cowplot)
+
+theme_set(theme_minimal(base_family = "Roboto",
+                        base_size = 18) +
+            theme(panel.grid.minor = element_blank()))
+```
+
+## Data
+
+Measurement data comes from [NHS Scotland's open data pages](https://www.opendata.nhs.scot/theme/isd). I use the most recent prescribing data available from [Dec 2019](https://www.opendata.nhs.scot/dataset/prescriptions-in-the-community/resource/fa276ad2-669a-472f-9c47-809f199fae21). The geography lookup codes were derived from the [datazone 2011 file](https://www.opendata.nhs.scot/dataset/geography-codes-and-labels/resource/395476ab-0720-4740-be07-ff4467141352) (although in hindsight I could have just as easily used the [Health Board lookup](https://www.opendata.nhs.scot/dataset/geography-codes-and-labels/resource/652ff726-e676-4a20-abda-435b98dd7bdc)]). Population estimates for each health board were derived from [this file](https://www.opendata.nhs.scot/dataset/population-estimates/resource/27a72cc8-d6d8-430c-8b4f-3109a9ceadb1) using the most recent estimates from 2018. 
+
+Some of these files only need some very quick cleaning to either drop unnecessary information or quick calculations so do those in this chunk of code where appropriate. 
+
+*Note:* the first of these files is very large and can take a few minutes to load. 
+
+```{r, warning=FALSE, message=FALSE}
+#Load in prescribing data direct from source. This is a very large file 
+#so using data.table's fread() function
+
+presc <- data.table::fread("https://www.opendata.nhs.scot/dataset/84393984-14e9-4b0d-a797-b288db64d088/resource/fa276ad2-669a-472f-9c47-809f199fae21/download/pitc201912.csv")
+
+#Load in Health Board lookup file to match HB codes to names
+#Some wuick tidying here to drop unnecessary data in this file
+geog <- data.table::fread("https://www.opendata.nhs.scot/dataset/9f942fdb-e59e-44f5-b534-d6e17229cc7b/resource/395476ab-0720-4740-be07-ff4467141352/download/geography_codes_and_labels_dz2011_10012020.csv") %>% 
+  clean_names %>% 
+  select(dz2011, iz2011, iz2011name) 
+
+
+dz_pop <- data.table::fread("https://www.opendata.nhs.scot/dataset/7f010430-6ce1-4813-b25c-f7f335bdc4dc/resource/c505f490-c201-44bd-abd1-1bd7a64285ee/download/dz2011-pop-est_30082019.csv") %>%  
+  mutate(Year = as.character(Year)) %>% 
+  filter(Year == "2018" & DZ2011 != "S92000003") %>% 
+  clean_names
+
+gp <- data.table::fread("https://www.opendata.nhs.scot/dataset/f23655c3-6e23-4103-a511-a80d998adb90/resource/a444ae58-9f8c-4447-90d8-5c8641171bb7/download/practice_contactdetails_jan2020-open-data.csv") %>% 
+  clean_names %>% 
+  select(practice_code, practice_list_size, nhs_board, data_zone2011 ) %>% 
+  rename(dz2011 = data_zone2011)
+```
+
+
+```{r}
+dz_pop %>% 
+  #select rows from 70 plus only
+  select(dz2011, age70:age90plus) %>%
+  #calculate total population over 70 in a new column
+  mutate(pop_70plus = rowSums(.[2:22])) %>% 
+  #drop all the other age columns
+  select(dz2011, pop_70plus) %>% 
+  left_join(., geog) %>% 
+  group_by(iz2011) %>% 
+  summarise(pop_70plus = sum(pop_70plus)) -> iz_pop
+geog
+```
+
+
+```{r}
+presc_resp <- 
+  presc %>% 
+  #names to lower case
+  clean_names %>% 
+  #tidy up the HB name
+  rename(hb2014 = hbt2014, 
+         practice_code = gp_practice) %>% 
+  #Keep only rows from chapter 3
+  filter(str_detect(bnf_item_code, "^03")) %>% 
+  left_join(., gp) %>% 
+  left_join(., geog) %>% 
+  select(iz2011, iz2011name, paid_quantity) %>% 
+  group_by(iz2011, iz2011name) %>% 
+  summarise(paid_quantity = sum(paid_quantity))
+
+presc_resp
+```
+
+
+
+```{r}
+dz_pop %>% 
+  #select rows from 70 plus only
+  select(dz2011, age70:age90plus) %>%
+  #calculate total population over 70 in a new column
+  mutate(pop_70plus = rowSums(.[2:22])) %>% 
+  #drop all the other age columns
+  select(dz2011, pop_70plus) %>% 
+  left_join(., geog) %>% 
+  group_by(iz2011) %>% 
+  summarise(pop_70plus = sum(pop_70plus)) -> iz_pop
+iz_pop
+
+dz_pop %>% 
+  select(dz2011, all_ages) %>% 
+  group_by(dz2011) %>% 
+  summarise(all_ages = sum(all_ages)) %>% 
+  left_join(geog) %>% 
+  group_by(iz2011) %>% 
+  summarise(all_ages = sum(all_ages)) %>% 
+  left_join(., iz_pop) %>% 
+  full_join(presc_resp, .) %>% 
+  select(iz2011, iz2011name, all_ages, pop_70plus, paid_quantity) -> final
+```
+
+
+```{r}
+final
+```
+
+```{r}
+dz_pop %>% 
+  group_by(dz2011) %>% 
+  summarise(dz_pop = sum(all_ages)) %>% 
+  left_join(., gp) %>% 
+  left_join(presc_resp, .) %>% 
+  left_join(., geog) %>%
+  left_join(., iz_pop) %>% 
+  select(iz2011, dz2011, practice_code, number_of_paid_items,
+         paid_quantity, dz_pop, practice_list_size, pop_70plus) %>% 
+  group_by(iz2011) %>% 
+  mutate(pop_70plus = round(pop_70plus/sum(dz_pop) *100, 1),
+         resp = sum(paid_quantity)/sum(dz_pop)) %>% 
+  distinct(iz2011, pop_70plus, resp)
+```
+
+
+```{r}
+dz_pop %>% 
+  #select rows from 70 plus only
+  select(dz2011, age70:age90plus) %>%
+  #calculate total population over 70 in a new column
+  mutate(pop_70plus = rowSums(.[2:22])) %>% 
+  #drop all the other age columns
+  select(dz2011, pop_70plus) %>% 
+  left_join(., geog) %>% 
+  group_by(iz2011) %>% 
+  summarise(pop_70plus = sum(pop_70plus)) -> iz_pop
+```
+
+
+

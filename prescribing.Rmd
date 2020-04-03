@@ -27,6 +27,7 @@ Load in required packages
 ```{r, message=FALSE,warning=FALSE}
 library(tidyverse)
 library(ggrepel)
+library(ggthemes)
 library(janitor)
 library(gtools)
 library(sf)
@@ -35,6 +36,7 @@ library(cowplot)
 theme_set(theme_minimal(base_family = "Roboto",
                         base_size = 18) +
             theme(panel.grid.minor = element_blank()))
+options(scipen = 10)
 ```
 
 ## Data
@@ -78,8 +80,34 @@ hb_pop <-
 
 Here what the prescribing file looks like
 
-```{r}
-presc
+```{r, fig.width=12}
+presc %>% 
+  rename(hb2014 = HBT) %>% 
+  left_join(., geog) %>% 
+  left_join(., hb_pop) %>% 
+  group_by(hb2014name) %>% 
+  summarise(n = n(),
+            pop = max(total_pop)) %>% 
+  ungroup -> lanark
+
+lanark$lab <- lanark$hb2014name %in% "NHS Lanarkshire"
+
+lanark %>% 
+  ggplot(aes(pop, n, colour = lab)) +
+  geom_point() +
+  geom_text_repel(data = subset(lanark, lab),
+                  aes(label = hb2014name)) +
+  geom_smooth(method = "lm", se = FALSE) +
+  scale_color_ptol(guide = guide_none()) +
+  expand_limits(x = c(0, 1200000), y = c(0, 300000)) +
+  theme(plot.margin = margin(3,15,3,3,"mm")) +
+  coord_cartesian(clip = "off") +
+  labs(title = "Community prescribing data",
+       subtitle = "Dec 2019 file", 
+       x = "Health Board Population",
+       y = "Number of rows in file") -> lanark_plot
+
+ggsave("lanark_plot.png", lanark_plot, width = 12, dpi = 600)
 ```
 
 I want a measure to reflect the vulnerability in each health board area. Respiratory diseases have been shown in early studies to be *one* of the indicators of people developing more severe Covid-19 related. complications. 
@@ -94,7 +122,7 @@ presc_resp <-
   #names to lower case
   clean_names %>% 
   #tidy up the HB name
-  rename(hb2014 = hbt2014) %>% 
+  rename(hb2014 = hbt) %>% 
   #Keep only rows from chapter 3
   filter(str_detect(bnf_item_code, "^03")) %>%  
   #Join in the HB lookup
@@ -157,12 +185,16 @@ final_tab %>%
   ggplot(aes(pct70, resp)) +
   geom_point() +
   geom_text_repel(aes(label = hb2014name), force = 20) +
-  scale_x_continuous(limits = c(0, 15)) +
-  scale_y_continuous(limits = c(0, 5)) +
+  scale_x_continuous(limits = c(0, 15),
+                     breaks = scales::pretty_breaks(n = 6)) +
+  scale_y_continuous(limits = c(0, 5),
+                     breaks = scales::pretty_breaks(n = 6)) +
   labs(title = "",
        x = "% population over 70",
        y = "Paid quantity respiratory items per capita")
 ```
+
+
 
 #Create tertiles
 
