@@ -80,6 +80,8 @@ hb_pop <-
 
 Here what the prescribing file looks like
 
+**Code below to create plot showing NHS Lanakshire as an outlier**
+
 ```{r, fig.width=12}
 presc %>% 
   rename(hb2014 = HBT) %>% 
