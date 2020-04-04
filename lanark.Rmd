@@ -1,0 +1,115 @@
+---
+title: "Lanarkshire"
+subtitle: "Analysis by NHS Health Board"
+author: "David Henderson"
+date: "30/03/2020"
+output: 
+  html_document:
+    code_folding: hide
+    df_print: paged
+    toc: true
+    toc_float: true
+    theme: spacelab
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+# Introduction
+
+Code to accompany blog post on personal and SCADR pages. 
+
+## Packages
+
+Load in required packages
+
+```{r, message=FALSE,warning=FALSE}
+library(tidyverse)
+library(ggrepel)
+library(ggthemes)
+library(janitor)
+library(gtools)
+library(sf)
+library(cowplot)
+
+theme_set(theme_minimal(base_family = "Roboto",
+                        base_size = 18) +
+            theme(panel.grid.minor = element_blank(),
+                  plot.margin = margin(3,15,3,3,"mm")))
+options(scipen = 10)
+```
+
+## Data
+
+Measurement data comes from [NHS Scotland's open data pages](https://www.opendata.nhs.scot/theme/isd). I use the most recent prescribing data available from [Dec 2019](https://www.opendata.nhs.scot/dataset/prescriptions-in-the-community/resource/fa276ad2-669a-472f-9c47-809f199fae21). The geography lookup codes were derived from the [datazone 2011 file](https://www.opendata.nhs.scot/dataset/geography-codes-and-labels/resource/395476ab-0720-4740-be07-ff4467141352) (although in hindsight I could have just as easily used the [Health Board lookup](https://www.opendata.nhs.scot/dataset/geography-codes-and-labels/resource/652ff726-e676-4a20-abda-435b98dd7bdc)]). Population estimates for each health board were derived from [this file](https://www.opendata.nhs.scot/dataset/population-estimates/resource/27a72cc8-d6d8-430c-8b4f-3109a9ceadb1) using the most recent estimates from 2018. 
+
+Some of these files only need some very quick cleaning to either drop unnecessary information or quick calculations so do those in this chunk of code where appropriate. 
+
+*Note:* the first of these files is very large and can take a few minutes to load. 
+
+```{r, warning=FALSE, message=FALSE}
+#Load in prescribing data direct from source. This is a very large file 
+#so using data.table's fread() function
+
+presc <- data.table::fread("https://www.opendata.nhs.scot/dataset/84393984-14e9-4b0d-a797-b288db64d088/resource/fa276ad2-669a-472f-9c47-809f199fae21/download/pitc201912.csv")
+
+#Load in Health Board lookup file to match HB codes to names
+#Some wuick tidying here to drop unnecessary data in this file
+geog <- data.table::fread("https://www.opendata.nhs.scot/dataset/9f942fdb-e59e-44f5-b534-d6e17229cc7b/resource/395476ab-0720-4740-be07-ff4467141352/download/geography_codes_and_labels_dz2011_10012020.csv") %>% 
+  clean_names %>% 
+  select(hb2014, hb2014name) %>% 
+  distinct(hb2014, hb2014name)
+
+#Load in popuoation estimates
+#More quick cleaning - keep most recent year of data and drop data 
+#For Scotland as a whole
+pop <- data.table::fread("https://www.opendata.nhs.scot/dataset/7f010430-6ce1-4813-b25c-f7f335bdc4dc/resource/27a72cc8-d6d8-430c-8b4f-3109a9ceadb1/download/hb2014_pop_est_01072019.csv") %>% 
+  mutate(Year = as.character(Year)) %>% 
+  filter(Year == "2018" & HB2014 != "S92000003") 
+
+#Quickly calculate population for each health board. 
+hb_pop <- 
+  pop %>% 
+  select(HB2014, AllAges) %>% 
+  group_by(HB2014) %>% 
+  summarise(total_pop = sum(AllAges)) %>% 
+  clean_names
+```
+
+# Tidy the prescribing data
+
+Here what the prescribing file looks like
+
+**Code below to create plot showing NHS Lanakshire as an outlier**
+
+```{r, fig.width=12}
+presc %>% 
+  rename(hb2014 = HBT) %>% 
+  left_join(., geog) %>% 
+  left_join(., hb_pop) %>% 
+  group_by(hb2014name) %>% 
+  summarise(n = n(),
+            pop = max(total_pop)) %>% 
+  ungroup -> lanark
+
+lanark$lab <- lanark$hb2014name %in% "NHS Lanarkshire"
+
+lanark %>% 
+  ggplot(aes(pop, n, colour = lab)) +
+  geom_point() +
+  geom_text_repel(data = subset(lanark, lab),
+                  aes(label = hb2014name)) +
+  geom_smooth(method = "lm", se = FALSE) +
+  scale_color_ptol(guide = guide_none()) +
+  expand_limits(x = c(0, 1200000), y = c(0, 300000)) +
+  coord_cartesian(clip = "off") +
+  labs(title = "Community prescribing data",
+       subtitle = "Dec 2019 file", 
+       x = "Health Board Population",
+       y = "Number of rows in file") -> lanark_plot
+lanark_plot
+```
+
+
+

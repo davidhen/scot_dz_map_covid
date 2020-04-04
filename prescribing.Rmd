@@ -35,7 +35,8 @@ library(cowplot)
 
 theme_set(theme_minimal(base_family = "Roboto",
                         base_size = 18) +
-            theme(panel.grid.minor = element_blank()))
+            theme(panel.grid.minor = element_blank(),
+                  plot.margin = margin(3,15,3,3,"mm")))
 options(scipen = 10)
 ```
 
@@ -80,36 +81,9 @@ hb_pop <-
 
 Here what the prescribing file looks like
 
-**Code below to create plot showing NHS Lanakshire as an outlier**
 
 ```{r, fig.width=12}
-presc %>% 
-  rename(hb2014 = HBT) %>% 
-  left_join(., geog) %>% 
-  left_join(., hb_pop) %>% 
-  group_by(hb2014name) %>% 
-  summarise(n = n(),
-            pop = max(total_pop)) %>% 
-  ungroup -> lanark
-
-lanark$lab <- lanark$hb2014name %in% "NHS Lanarkshire"
-
-lanark %>% 
-  ggplot(aes(pop, n, colour = lab)) +
-  geom_point() +
-  geom_text_repel(data = subset(lanark, lab),
-                  aes(label = hb2014name)) +
-  geom_smooth(method = "lm", se = FALSE) +
-  scale_color_ptol(guide = guide_none()) +
-  expand_limits(x = c(0, 1200000), y = c(0, 300000)) +
-  theme(plot.margin = margin(3,15,3,3,"mm")) +
-  coord_cartesian(clip = "off") +
-  labs(title = "Community prescribing data",
-       subtitle = "Dec 2019 file", 
-       x = "Health Board Population",
-       y = "Number of rows in file") -> lanark_plot
-
-ggsave("lanark_plot.png", lanark_plot, width = 12, dpi = 600)
+presc
 ```
 
 I want a measure to reflect the vulnerability in each health board area. Respiratory diseases have been shown in early studies to be *one* of the indicators of people developing more severe Covid-19 related. complications. 
@@ -193,9 +167,14 @@ final_tab %>%
                      breaks = scales::pretty_breaks(n = 6)) +
   labs(title = "",
        x = "% population over 70",
-       y = "Paid quantity respiratory items per capita")
+       y = "Paid quantity respiratory items per capita") -> scatter
+
+scatter
 ```
 
+```{r eval=FALSE}
+ggsave("scatter.png", scatter, width = 9, height = 6.75, dpi = 600)
+```
 
 
 #Create tertiles
